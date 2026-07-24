@@ -64,10 +64,11 @@ _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 # this node replaces.
 _ROTATION_FIX = Rotation.from_euler("z", 90, degrees=True)
 
-# Moves the viewer relative pose to the OpenArm position. The default
-# is for the OpenArm Cell environment and mirrors FRAME_OFFSET_NECK of
-# the Meta Quest UDP receiver.
-_FRAME_OFFSET_DEFAULT = "0.1,0,1.2"
+# Relative pose is computed from viewer.
+# We need to move it to OpenArm position.
+#
+# This is for OpenArm Cell environment.
+_FRAME_OFFSET_CELL: np.ndarray = np.array([0.1, 0, 1.2], dtype=np.float32)
 
 
 app = FastAPI()
@@ -81,7 +82,7 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
         return (1.57 / 2.0) * (1.0 - trigger)  # 0-> 1.57, 1->0
 
 
-def _rectify_pose(pose, reference, frame_offset):
+def _rectify_pose(pose, reference):
     """Convert a WebXR controller pose to an OpenArm workspace pose.
 
     ``pose`` and ``reference`` (the viewer pose) are WebXR style poses
@@ -121,7 +122,7 @@ def _rectify_pose(pose, reference, frame_offset):
     ).inv()
     position = reference_rotation_inv.apply(position)
     rotation = reference_rotation_inv * rotation
-    position = _ROBOT_ROTATION.apply(position) + frame_offset
+    position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = _ROBOT_ROTATION * rotation * _ROTATION_FIX
     quaternion = rotation.as_quat()
 
@@ -186,7 +187,7 @@ async def _websocket_endpoint(websocket: WebSocket):
                         smoother = smoothers[side]
                         adjusted_pose = smoother.smooth(
                             smoother_time,
-                            _rectify_pose(response[pose], reference, args.frame_offset),
+                            _rectify_pose(response[pose], reference),
                         )
                         gripper_angle = _map_trigger_to_gripper(response[trigger], side)
                         gripper_array = np.array([gripper_angle], dtype=np.float32)
@@ -262,16 +263,6 @@ async def _main_async():
     await task_dora
 
 
-def _parse_frame_offset(text):
-    """Parse an ``x,y,z`` frame offset in meters as a NumPy array."""
-    values = text.split(",")
-    if len(values) != 3:
-        raise argparse.ArgumentTypeError(
-            f"frame offset must be 'x,y,z' in meters: {text!r}"
-        )
-    return np.array([float(value) for value in values], dtype=np.float32)
-
-
 def main():
     """Run WebXR server."""
     parser = argparse.ArgumentParser(description="WebXR server")
@@ -302,13 +293,6 @@ def main():
         default=tls_key_file_default,
         required=tls_key_file_default is None,
         help="TLS key file for the certificate file",
-    )
-    parser.add_argument(
-        "--frame-offset",
-        type=_parse_frame_offset,
-        default=os.getenv("FRAME_OFFSET", _FRAME_OFFSET_DEFAULT),
-        help="Offset 'x,y,z' in meters that moves the viewer relative "
-        f"pose to the OpenArm position (default: {_FRAME_OFFSET_DEFAULT})",
     )
 
     global args

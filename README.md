@@ -86,8 +86,7 @@ included in a `frame` message.
 Controller poses are reported relative to the viewer: the
 displacement and orientation are rotated into the viewer's own
 frame. This is meant for a headset resting on the operator's neck so
-that the frame follows the torso. You can adjust where the poses are
-placed in the OpenArm workspace with the `--frame-offset` option.
+that the frame follows the torso.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -119,7 +118,6 @@ useful in a dora-rs dataflow YAML.
 | `--port`                 | `PORT`                 | `8443`      | The port that the Web server listens on.                                          |
 | `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS.        |
 | `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required because WebXR requires HTTPS. |
-| `--frame-offset`         | `FRAME_OFFSET`         | `0.1,0,1.2` | The offset `x,y,z` in meters that moves the viewer relative pose to the OpenArm position. |
 
 ## License
 
