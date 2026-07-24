@@ -59,11 +59,6 @@ _ROBOT_ROTATION_MATRIX: np.ndarray = np.array(
 )
 _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 
-# Aligns the controller grip frame with the OpenArm end effector
-# frame. Inherited from the R_FIX of the Meta Quest UDP receiver that
-# this node replaces.
-_ROTATION_FIX = Rotation.from_euler("z", 90, degrees=True)
-
 # Relative pose is computed from viewer.
 # We need to move it to OpenArm position.
 #
@@ -82,12 +77,16 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
         return (1.57 / 2.0) * (1.0 - trigger)  # 0-> 1.57, 1->0
 
 
-def _rectify_pose(pose, reference):
-    """Convert a WebXR controller pose to an OpenArm workspace pose.
+def _adjust_pose(pose, reference, smoother, smoother_time):
+    """Convert WebXR style pose to our style.
 
-    ``pose`` and ``reference`` (the viewer pose) are WebXR style poses
-    in the same world-fixed reference space:
-      * right-handed, Y-up
+    ``pose`` and ``reference`` (the viewer pose) are in the same
+    world-fixed reference space. The output is relative to the
+    viewer: the displacement and orientation are rotated into the
+    viewer's own frame.
+
+    WebXR style:
+      * right-handed
       * {
           x: X, (meter)
           y: Y, (meter)
@@ -97,12 +96,6 @@ def _rectify_pose(pose, reference):
           qz: QZ, (quaternion)
           qw: QW, (quaternion)
         }
-
-    The displacement from the viewer and the controller orientation
-    are rotated into the viewer's own frame. This mirrors the NECK
-    mode of the Meta Quest UDP receiver that this node replaces and is
-    meant for a headset that rests on the operator's neck so that the
-    frame follows the torso.
 
     Our style:
       * right-handed
@@ -116,17 +109,19 @@ def _rectify_pose(pose, reference):
         ],
         dtype=np.float32,
     )
-    rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
     reference_rotation_inv = Rotation.from_quat(
         [reference["qx"], reference["qy"], reference["qz"], reference["qw"]]
     ).inv()
     position = reference_rotation_inv.apply(position)
-    rotation = reference_rotation_inv * rotation
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
-    rotation = _ROBOT_ROTATION * rotation * _ROTATION_FIX
+    rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
+    rotation = reference_rotation_inv * rotation
+    # TODO: Add a comment why we need this
+    rotation_fix = Rotation.from_euler("z", 90, degrees=True)
+    rotation = _ROBOT_ROTATION * rotation * rotation_fix
     quaternion = rotation.as_quat()
 
-    return np.array(
+    adjusted_pose = np.array(
         [
             position[0],  # x
             position[1],  # y
@@ -138,6 +133,7 @@ def _rectify_pose(pose, reference):
         ],
         dtype=np.float32,
     )
+    return pa.array(smoother.smooth(smoother_time, adjusted_pose))
 
 
 _POSE_STRUCT_TYPE = pa.struct({"pose": pa.list_(pa.float32())})
@@ -185,9 +181,8 @@ async def _websocket_endpoint(websocket: WebSocket):
                     trigger = f"trigger_{side}"
                     if pose in response and trigger in response and reference:
                         smoother = smoothers[side]
-                        adjusted_pose = smoother.smooth(
-                            smoother_time,
-                            _rectify_pose(response[pose], reference),
+                        adjusted_pose = _adjust_pose(
+                            response[pose], reference, smoother, smoother_time
                         )
                         gripper_angle = _map_trigger_to_gripper(response[trigger], side)
                         gripper_array = np.array([gripper_angle], dtype=np.float32)

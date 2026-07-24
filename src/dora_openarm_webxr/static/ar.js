@@ -91,17 +91,6 @@ if (navigator.xr) {
     };
     websocket.send(JSON.stringify(response));
   }
-  function transformToPose(transform) {
-    return {
-      x: transform.position.x,
-      y: transform.position.y,
-      z: transform.position.z,
-      qx: transform.orientation.x,
-      qy: transform.orientation.y,
-      qz: transform.orientation.z,
-      qw: transform.orientation.w,
-    };
-  }
   function sendFrame(session, space, time, frame) {
     if (session.inputSources.length < 2) {
       return;
@@ -113,7 +102,15 @@ if (navigator.xr) {
     const response = {
       type: "frame",
       time: time,
-      pose_reference: transformToPose(viewerPose.transform),
+      pose_reference: {
+        x: viewerPose.transform.position.x,
+        y: viewerPose.transform.position.y,
+        z: viewerPose.transform.position.z,
+        qx: viewerPose.transform.orientation.x,
+        qy: viewerPose.transform.orientation.y,
+        qz: viewerPose.transform.orientation.z,
+        qw: viewerPose.transform.orientation.w,
+      },
     };
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
@@ -122,7 +119,15 @@ if (navigator.xr) {
       const suffix = `_${source.handedness}`;
       const pose = frame.getPose(source.gripSpace, space);
       if (pose) {
-        response[`pose${suffix}`] = transformToPose(pose.transform);
+        response[`pose${suffix}`] = {
+          x: pose.transform.position.x,
+          y: pose.transform.position.y,
+          z: pose.transform.position.z,
+          qx: pose.transform.orientation.x,
+          qy: pose.transform.orientation.y,
+          qz: pose.transform.orientation.z,
+          qw: pose.transform.orientation.w,
+        };
       }
       const gamepad = source.gamepad;
       if (gamepad) {
@@ -181,10 +186,7 @@ if (navigator.xr) {
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
 
     session
-      // We send controller and viewer poses in a world-fixed space to
-      // the dora-rs node. The dora-rs node computes the viewer
-      // relative position in world axes so that rotating the head
-      // doesn't move the target.
+      // We send relative position from viewer to the dora-rs node.
       .requestReferenceSpace("local-floor")
       .catch(() => session.requestReferenceSpace("local"))
       .then((space) => {

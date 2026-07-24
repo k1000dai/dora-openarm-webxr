@@ -83,11 +83,6 @@ joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
 included in a `frame` message.
 
-Controller poses are reported relative to the viewer: the
-displacement and orientation are rotated into the viewer's own
-frame. This is meant for a headset resting on the operator's neck so
-that the frame follows the torso.
-
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `status`           | `string`          | `"ready"` when a WebXR session is started.                                                                                                      |
