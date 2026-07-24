@@ -91,13 +91,29 @@ if (navigator.xr) {
     };
     websocket.send(JSON.stringify(response));
   }
+  function transformToPose(transform) {
+    return {
+      x: transform.position.x,
+      y: transform.position.y,
+      z: transform.position.z,
+      qx: transform.orientation.x,
+      qy: transform.orientation.y,
+      qz: transform.orientation.z,
+      qw: transform.orientation.w,
+    };
+  }
   function sendFrame(session, space, time, frame) {
     if (session.inputSources.length < 2) {
+      return;
+    }
+    const viewerPose = frame.getViewerPose(space);
+    if (!viewerPose) {
       return;
     }
     const response = {
       type: "frame",
       time: time,
+      pose_reference: transformToPose(viewerPose.transform),
     };
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
@@ -106,15 +122,7 @@ if (navigator.xr) {
       const suffix = `_${source.handedness}`;
       const pose = frame.getPose(source.gripSpace, space);
       if (pose) {
-        response[`pose${suffix}`] = {
-          x: pose.transform.position.x,
-          y: pose.transform.position.y,
-          z: pose.transform.position.z,
-          qx: pose.transform.orientation.x,
-          qy: pose.transform.orientation.y,
-          qz: pose.transform.orientation.z,
-          qw: pose.transform.orientation.w,
-        };
+        response[`pose${suffix}`] = transformToPose(pose.transform);
       }
       const gamepad = source.gamepad;
       if (gamepad) {
@@ -173,8 +181,12 @@ if (navigator.xr) {
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
 
     session
-      // We send relative position from viewer to the dora-rs node.
-      .requestReferenceSpace("viewer")
+      // We send controller and viewer poses in a world-fixed space to
+      // the dora-rs node. The dora-rs node computes the viewer
+      // relative position in world axes so that rotating the head
+      // doesn't move the target.
+      .requestReferenceSpace("local-floor")
+      .catch(() => session.requestReferenceSpace("local"))
       .then((space) => {
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
@@ -188,7 +200,9 @@ if (navigator.xr) {
       });
   }
   function onStart() {
-    navigator.xr.requestSession("immersive-ar").then(onSessionStart);
+    navigator.xr
+      .requestSession("immersive-ar", { optionalFeatures: ["local-floor"] })
+      .then(onSessionStart);
   }
 
   websocket.addEventListener("open", () => {

@@ -59,11 +59,15 @@ _ROBOT_ROTATION_MATRIX: np.ndarray = np.array(
 )
 _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 
-# Relative pose is computed from viewer.
-# We need to move it to OpenArm position.
-#
-# This is for OpenArm Cell environment.
-_FRAME_OFFSET_CELL: np.ndarray = np.array([0.1, 0, 1.2], dtype=np.float32)
+# Aligns the controller grip frame with the OpenArm end effector
+# frame. Inherited from the R_FIX of the Meta Quest UDP receiver that
+# this node replaces.
+_ROTATION_FIX = Rotation.from_euler("z", 90, degrees=True)
+
+# Moves the viewer relative pose to the OpenArm position. The default
+# is for the OpenArm Cell environment and mirrors FRAME_OFFSET_NECK of
+# the Meta Quest UDP receiver.
+_FRAME_OFFSET_DEFAULT = "0.1,0,1.2"
 
 
 app = FastAPI()
@@ -77,11 +81,12 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
         return (1.57 / 2.0) * (1.0 - trigger)  # 0-> 1.57, 1->0
 
 
-def _adjust_pose(pose, smoother, smoother_time):
-    """Convert WebXR style pose to our style.
+def _rectify_pose(pose, reference, frame_offset):
+    """Convert a WebXR controller pose to an OpenArm workspace pose.
 
-    WebXR style:
-      * right-handed
+    ``pose`` and ``reference`` (the viewer pose) are WebXR style poses
+    in the same world-fixed reference space:
+      * right-handed, Y-up
       * {
           x: X, (meter)
           y: Y, (meter)
@@ -92,19 +97,35 @@ def _adjust_pose(pose, smoother, smoother_time):
           qw: QW, (quaternion)
         }
 
+    The displacement from the viewer and the controller orientation
+    are rotated into the viewer's own frame. This mirrors the NECK
+    mode of the Meta Quest UDP receiver that this node replaces and is
+    meant for a headset that rests on the operator's neck so that the
+    frame follows the torso.
+
     Our style:
       * right-handed
       * [x, y, z, qw, qx, qy, qz]
     """
-    position = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32)
-    position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
+    position = np.array(
+        [
+            pose["x"] - reference["x"],
+            pose["y"] - reference["y"],
+            pose["z"] - reference["z"],
+        ],
+        dtype=np.float32,
+    )
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
-    # TODO: Add a comment why we need this
-    rotation_fix = Rotation.from_euler("z", 90, degrees=True)
-    rotation = _ROBOT_ROTATION * rotation * rotation_fix
+    reference_rotation_inv = Rotation.from_quat(
+        [reference["qx"], reference["qy"], reference["qz"], reference["qw"]]
+    ).inv()
+    position = reference_rotation_inv.apply(position)
+    rotation = reference_rotation_inv * rotation
+    position = _ROBOT_ROTATION.apply(position) + frame_offset
+    rotation = _ROBOT_ROTATION * rotation * _ROTATION_FIX
     quaternion = rotation.as_quat()
 
-    adjusted_pose = np.array(
+    return np.array(
         [
             position[0],  # x
             position[1],  # y
@@ -116,7 +137,6 @@ def _adjust_pose(pose, smoother, smoother_time):
         ],
         dtype=np.float32,
     )
-    return pa.array(smoother.smooth(smoother_time, adjusted_pose))
 
 
 _POSE_STRUCT_TYPE = pa.struct({"pose": pa.list_(pa.float32())})
@@ -158,13 +178,15 @@ async def _websocket_endpoint(websocket: WebSocket):
                             pa.array([bool(response[name])], type=pa.bool_()),
                             metadata,
                         )
+                reference = response.get("pose_reference")
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
-                    if pose in response and trigger in response:
+                    if pose in response and trigger in response and reference:
                         smoother = smoothers[side]
-                        adjusted_pose = _adjust_pose(
-                            response[pose], smoother, smoother_time
+                        adjusted_pose = smoother.smooth(
+                            smoother_time,
+                            _rectify_pose(response[pose], reference, args.frame_offset),
                         )
                         gripper_angle = _map_trigger_to_gripper(response[trigger], side)
                         gripper_array = np.array([gripper_angle], dtype=np.float32)
@@ -240,6 +262,16 @@ async def _main_async():
     await task_dora
 
 
+def _parse_frame_offset(text):
+    """Parse an ``x,y,z`` frame offset in meters as a NumPy array."""
+    values = text.split(",")
+    if len(values) != 3:
+        raise argparse.ArgumentTypeError(
+            f"frame offset must be 'x,y,z' in meters: {text!r}"
+        )
+    return np.array([float(value) for value in values], dtype=np.float32)
+
+
 def main():
     """Run WebXR server."""
     parser = argparse.ArgumentParser(description="WebXR server")
@@ -270,6 +302,13 @@ def main():
         default=tls_key_file_default,
         required=tls_key_file_default is None,
         help="TLS key file for the certificate file",
+    )
+    parser.add_argument(
+        "--frame-offset",
+        type=_parse_frame_offset,
+        default=os.getenv("FRAME_OFFSET", _FRAME_OFFSET_DEFAULT),
+        help="Offset 'x,y,z' in meters that moves the viewer relative "
+        f"pose to the OpenArm position (default: {_FRAME_OFFSET_DEFAULT})",
     )
 
     global args
